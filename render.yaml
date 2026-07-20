@@ -1,0 +1,37 @@
+# Render Blueprint — connect this repo in Render Dashboard → New → Blueprint
+services:
+  - type: web
+    name: line-ai-secretary
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app.main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: DATA_DIR
+        value: /var/data
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: BASE_URL
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+    # Optional: paid plan persistent disk so Google OAuth tokens survive redeploys
+    # disk:
+    #   name: line-ai-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
