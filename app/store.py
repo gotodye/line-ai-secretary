@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 
 import requests
@@ -78,22 +79,47 @@ def _local_save(data: dict) -> None:
     )
 
 
+# 本機退路用來記錄各鍵到期時間的保留欄位（Redis 端由 EX 參數處理）。
+_EXPIRES_FIELD = "__expires__"
+
+
+def _local_expired(data: dict, key: str) -> bool:
+    expires_at = data.get(_EXPIRES_FIELD, {}).get(key)
+    return expires_at is not None and time.time() >= expires_at
+
+
 def get(key: str) -> str | None:
     if using_remote():
         result = _command("GET", key)
         return result if isinstance(result, str) else None
     with _lock:
-        value = _local_load().get(key)
+        data = _local_load()
+        if _local_expired(data, key):
+            # 到期就順手清掉，行為對齊 Redis 的 EX。
+            data.pop(key, None)
+            data.get(_EXPIRES_FIELD, {}).pop(key, None)
+            _local_save(data)
+            return None
+        value = data.get(key)
     return value if isinstance(value, str) else None
 
 
-def set(key: str, value: str) -> None:  # noqa: A001 - mirrors the Redis verb
+def set(key: str, value: str, ttl_seconds: int | None = None) -> None:  # noqa: A001
+    """Store a value, optionally expiring it after ttl_seconds."""
     if using_remote():
-        _command("SET", key, value)
+        if ttl_seconds:
+            _command("SET", key, value, "EX", str(ttl_seconds))
+        else:
+            _command("SET", key, value)
         return
     with _lock:
         data = _local_load()
         data[key] = value
+        expires = data.setdefault(_EXPIRES_FIELD, {})
+        if ttl_seconds:
+            expires[key] = time.time() + ttl_seconds
+        else:
+            expires.pop(key, None)
         _local_save(data)
 
 
@@ -103,7 +129,9 @@ def delete(key: str) -> None:
         return
     with _lock:
         data = _local_load()
-        if data.pop(key, None) is not None:
+        removed = data.pop(key, None) is not None
+        removed |= data.get(_EXPIRES_FIELD, {}).pop(key, None) is not None
+        if removed:
             _local_save(data)
 
 

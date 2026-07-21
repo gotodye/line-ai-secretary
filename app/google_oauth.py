@@ -16,6 +16,12 @@ from google_auth_oauthlib.flow import Flow  # noqa: E402
 
 from app import config  # noqa: E402
 from app import memory  # noqa: E402
+from app import store  # noqa: E402
+
+# 授權連結與 callback 是兩個獨立的請求（甚至可能是不同的行程），
+# PKCE 的 code_verifier 必須跨請求保存，否則換 token 會被 Google 以
+# 「Missing code verifier」拒絕。授權通常幾分鐘內完成，給 10 分鐘足夠。
+_PKCE_TTL_SECONDS = 600
 
 
 class GoogleNotLinkedError(RuntimeError):
@@ -24,6 +30,10 @@ class GoogleNotLinkedError(RuntimeError):
 
 class GoogleNotConfiguredError(RuntimeError):
     pass
+
+
+def _pkce_key(state: str) -> str:
+    return f"pkce:{state}"
 
 
 def _client_config() -> dict:
@@ -49,23 +59,39 @@ def build_auth_url(line_user_id: str) -> str:
         state=line_user_id,
     )
     flow.redirect_uri = config.GOOGLE_REDIRECT_URI
+    # authorization_url() 會在這裡才產生 code_verifier 並送出對應的 challenge，
+    # 所以要在呼叫之後才讀得到。
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
+    if flow.code_verifier:
+        store.set(
+            _pkce_key(line_user_id), flow.code_verifier, ttl_seconds=_PKCE_TTL_SECONDS
+        )
     return auth_url
 
 
 def exchange_code(code: str, state: str) -> dict:
     """Exchange auth code for tokens and store under LINE user id (= state)."""
+    code_verifier = store.get(_pkce_key(state))
+    if not code_verifier:
+        # 超過 10 分鐘才點連結、或伺服器換過儲存設定都會走到這裡。
+        raise RuntimeError(
+            "授權連結已逾時或失效，請回到 LINE 重新傳送「連結 Google」取得新連結"
+        )
+
     flow = Flow.from_client_config(
         _client_config(),
         scopes=config.GOOGLE_SCOPES,
         state=state,
+        code_verifier=code_verifier,
     )
     flow.redirect_uri = config.GOOGLE_REDIRECT_URI
     flow.fetch_token(code=code)
+    # 一次性使用，換完就清掉。
+    store.delete(_pkce_key(state))
     creds = flow.credentials
     token_info = {
         "token": creds.token,
