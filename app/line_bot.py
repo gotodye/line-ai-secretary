@@ -85,17 +85,17 @@ def _ack(reply_token: str, text: str = "收到，稍等我處理…") -> None:
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def on_text_message(event: MessageEvent) -> None:
-    _ack(event.reply_token)
+    # 先開工再回確認訊息：_ack 是一次 LINE API 往返，擺在前面等於平白
+    # 讓每則訊息多等那段時間才開始處理。
     threading.Thread(
         target=_process_async,
         args=(event.source.user_id, event.message.text),
         daemon=True,
     ).start()
+    _ack(event.reply_token)
 
 
 def _handle_media(event: MessageEvent, mime_type: str, prompt: str, ack: str) -> None:
-    _ack(event.reply_token, ack)
-
     def work() -> None:
         try:
             data = _fetch_media(event.message.id)
@@ -106,6 +106,7 @@ def _handle_media(event: MessageEvent, mime_type: str, prompt: str, ack: str) ->
         _process_async(event.source.user_id, prompt, attachment=(data, mime_type))
 
     threading.Thread(target=work, daemon=True).start()
+    _ack(event.reply_token, ack)
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)

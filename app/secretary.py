@@ -7,6 +7,9 @@ from app import gemini_client
 from app import memory
 from app.google_oauth import GoogleNotConfiguredError, build_auth_url
 
+# 帶進模型的對話輪數；儲存端保留較多，這裡只取最近的。
+HISTORY_TURNS = 12
+
 HELP_TEXT = """我是你的 AI 秘書，可以：
 
 【一般】
@@ -50,9 +53,11 @@ def handle_text(
 
     # 有附件時一律交給模型處理，不要被指令比對攔截。
     if attachment:
-        history = memory.get_history(user_id)
-        answer = gemini_client.chat(user_id, raw, history, attachment=attachment)
-        memory.append_history(user_id, "assistant", answer)
+        full = memory.get_full_history(user_id)
+        answer = gemini_client.chat(
+            user_id, raw, full[-HISTORY_TURNS:], attachment=attachment
+        )
+        memory.append_exchange(user_id, raw, answer, known_full=full)
         return answer
 
     cmd = raw.replace(" ", "")
@@ -110,8 +115,8 @@ def handle_text(
         )
 
     # Default: Gemini with tools
-    history = memory.get_history(user_id)
-    answer = gemini_client.chat(user_id, raw, history)
-    memory.append_history(user_id, "user", raw)
-    memory.append_history(user_id, "assistant", answer)
+    # 讀一次、寫一次：把完整歷史留著回傳給 append_exchange，避免重複讀取。
+    full = memory.get_full_history(user_id)
+    answer = gemini_client.chat(user_id, raw, full[-HISTORY_TURNS:])
+    memory.append_exchange(user_id, raw, answer, known_full=full)
     return answer[:4900]

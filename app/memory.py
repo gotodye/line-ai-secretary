@@ -45,13 +45,43 @@ def _load_history(user_id: str) -> list[dict[str, str]]:
     return items if isinstance(items, list) else []
 
 
-def get_history(user_id: str, limit: int = 12) -> list[dict[str, str]]:
+def get_full_history(user_id: str) -> list[dict[str, str]]:
+    """Whole stored history. Callers that will also append should use this and
+    hand the result back to append_exchange, so one turn costs one read."""
     try:
-        return _load_history(user_id)[-limit:]
+        return _load_history(user_id)
     except store.StoreError as exc:
         # 記憶讀不到不該讓對話中斷，退化成無上下文繼續回答。
         logger.error("讀取對話記憶失敗: %s", exc)
         return []
+
+
+def get_history(user_id: str, limit: int = 12) -> list[dict[str, str]]:
+    return get_full_history(user_id)[-limit:]
+
+
+def append_exchange(
+    user_id: str,
+    user_text: str,
+    answer: str,
+    known_full: list[dict[str, str]] | None = None,
+    limit: int = 40,
+) -> None:
+    """Append both sides of one turn in a single write.
+
+    分兩次呼叫 append_history 會產生四次 Upstash 往返（各一讀一寫）；
+    跨區域時每次約 160 ms，光這裡就是半秒。傳入 known_full 可再省掉一次讀取。
+    """
+    try:
+        with _lock:
+            items = known_full if known_full is not None else _load_history(user_id)
+            items = [*items, {"role": "user", "text": user_text},
+                     {"role": "assistant", "text": answer}]
+            store.set(
+                _history_key(user_id), json.dumps(items[-limit:], ensure_ascii=False)
+            )
+    except store.StoreError as exc:
+        logger.error("寫入對話記憶失敗: %s", exc)
 
 
 def append_history(user_id: str, role: str, text: str, limit: int = 40) -> None:
