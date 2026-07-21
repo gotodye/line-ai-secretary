@@ -11,7 +11,8 @@ HELP_TEXT = """我是你的 AI 秘書，可以：
 
 【一般】
 ・摘要、草擬、翻譯、規劃待辦
-・自然語言對話
+・查天氣、新聞、股價等即時資訊
+・看圖片、聽語音訊息
 
 【Google 服務】（需先連結）
 ・日曆：查行程、建立行程
@@ -25,19 +26,34 @@ HELP_TEXT = """我是你的 AI 秘書，可以：
 ・連結 Google — 授權 Google 帳號
 ・解除 Google — 取消授權
 ・清除對話 — 忘掉近期對話
+・記憶 — 列出我記住的事
+・忘記 XXX — 忘掉某件事
 ・狀態 — 查看連結狀態
 
 直接用中文說需求即可，例如：
 「今天有什麼行程？」
 「幫我寄信給 xxx@example.com，主旨……」
 「在待辦加上：準備簡報」
+「台北明天會下雨嗎？」
+
+我會自己記住值得長期記住的事，例如你的稱謂、偏好、
+常聯絡的人，之後就不用重複交代。
 """
 
 
-def handle_text(user_id: str, text: str) -> str:
+def handle_text(
+    user_id: str, text: str, attachment: tuple[bytes, str] | None = None
+) -> str:
     raw = (text or "").strip()
     if not raw:
         return "請傳送文字訊息。"
+
+    # 有附件時一律交給模型處理，不要被指令比對攔截。
+    if attachment:
+        history = memory.get_history(user_id)
+        answer = gemini_client.chat(user_id, raw, history, attachment=attachment)
+        memory.append_history(user_id, "assistant", answer)
+        return answer
 
     cmd = raw.replace(" ", "")
 
@@ -57,6 +73,20 @@ def handle_text(user_id: str, text: str) -> str:
     if cmd in ("清除對話", "清除紀錄", "reset"):
         memory.clear_history(user_id)
         return "已清除近期對話記憶。"
+
+    if cmd in ("記憶", "記得什麼", "memory"):
+        facts = memory.get_facts(user_id)
+        if not facts:
+            return "我還沒記住關於你的事。聊久一點我會自己記下值得記的。"
+        listed = "\n".join(f"{i}. {f}" for i, f in enumerate(facts, 1))
+        return f"我記得這些事：\n\n{listed}\n\n要我忘記某一項，說「忘記 <關鍵字>」。"
+
+    if cmd in ("清除記憶", "忘記全部", "忘記所有"):
+        memory.clear_facts(user_id)
+        return "已忘記所有長期記憶。"
+
+    if cmd.startswith("忘記") and len(cmd) > 2:
+        return memory.remove_fact(user_id, cmd[2:])
 
     if cmd in ("解除Google", "解除連結", "unlink", "取消授權"):
         memory.delete_google_token(user_id)

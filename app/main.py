@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 
 from flask import Flask, abort, request
 from linebot.v3.exceptions import InvalidSignatureError
 
+from app import briefing
 from app import config
 from app import store
 from app.google_oauth import exchange_code
-from app.line_bot import handler
+from app.line_bot import handler, push_text
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,6 +56,25 @@ def health():
     if request.args.get("deep"):
         return {"ok": True, "storage_ok": store.healthy()}
     return {"ok": True}
+
+
+@app.post("/cron/brief")
+@app.get("/cron/brief")
+def cron_brief():
+    """Triggered by an external scheduler to push the morning brief."""
+    if not config.CRON_SECRET:
+        logger.warning("收到晨間簡報請求，但未設定 CRON_SECRET")
+        return {"error": "尚未設定 CRON_SECRET"}, 503
+
+    supplied = request.headers.get("X-Cron-Secret") or request.args.get("secret", "")
+    # 固定時間比較，避免以回應時間逐字元猜出密碼。
+    if not hmac.compare_digest(supplied, config.CRON_SECRET):
+        logger.warning("晨間簡報請求的密碼不正確")
+        return {"error": "unauthorized"}, 401
+
+    result = briefing.send_briefs(push_text)
+    logger.info("晨間簡報結果: %s", result)
+    return result
 
 
 @app.post("/callback")

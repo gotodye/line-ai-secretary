@@ -24,6 +24,15 @@ def _token_key(user_id: str) -> str:
     return f"gtoken:{user_id}"
 
 
+def _facts_key(user_id: str) -> str:
+    return f"facts:{user_id}"
+
+
+# 事實是長期記憶，不像對話記憶會滾動淘汰，所以設上限避免無限成長
+# 撐爆 system prompt。
+MAX_FACTS = 60
+
+
 def _load_history(user_id: str) -> list[dict[str, str]]:
     raw = store.get(_history_key(user_id))
     if not raw:
@@ -86,6 +95,71 @@ def set_google_token(user_id: str, token_info: dict[str, Any]) -> None:
 
 def delete_google_token(user_id: str) -> None:
     store.delete(_token_key(user_id))
+
+
+def get_facts(user_id: str) -> list[str]:
+    """Long-term facts the user asked the secretary to remember."""
+    try:
+        raw = store.get(_facts_key(user_id))
+    except store.StoreError as exc:
+        logger.error("讀取長期記憶失敗: %s", exc)
+        return []
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("長期記憶格式毀損，重置: %s", user_id)
+        return []
+    return [f for f in items if isinstance(f, str)] if isinstance(items, list) else []
+
+
+def add_fact(user_id: str, fact: str) -> str:
+    fact = fact.strip()
+    if not fact:
+        return "沒有可記住的內容。"
+    with _lock:
+        facts = get_facts(user_id)
+        # 完全相同的敘述不重複記錄；語意重複交給模型自己判斷。
+        if fact in facts:
+            return f"這件事我已經記住了：{fact}"
+        facts.append(fact)
+        dropped = ""
+        if len(facts) > MAX_FACTS:
+            removed = facts.pop(0)
+            dropped = f"（記憶已滿，忘掉最舊的一則：{removed}）"
+        store.set(_facts_key(user_id), json.dumps(facts, ensure_ascii=False))
+    return f"記住了：{fact}{dropped}"
+
+
+def remove_fact(user_id: str, keyword: str) -> str:
+    keyword = keyword.strip()
+    if not keyword:
+        return "請說明要忘記什麼。"
+    with _lock:
+        facts = get_facts(user_id)
+        matched = [f for f in facts if keyword in f]
+        if not matched:
+            return f"沒有找到跟「{keyword}」有關的記憶。"
+        kept = [f for f in facts if f not in matched]
+        store.set(_facts_key(user_id), json.dumps(kept, ensure_ascii=False))
+    return "已忘記：" + "、".join(matched)
+
+
+def clear_facts(user_id: str) -> None:
+    try:
+        store.delete(_facts_key(user_id))
+    except store.StoreError as exc:
+        logger.error("清除長期記憶失敗: %s", exc)
+
+
+def list_linked_users() -> list[str]:
+    """LINE user ids that have a stored Google token — the brief's audience."""
+    try:
+        return [k.split(":", 1)[1] for k in store.keys("gtoken:*") if ":" in k]
+    except store.StoreError as exc:
+        logger.error("列舉已連結使用者失敗: %s", exc)
+        return []
 
 
 def is_google_linked(user_id: str) -> bool:

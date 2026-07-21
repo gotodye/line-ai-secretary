@@ -39,6 +39,9 @@ UPSTASH_REDIS_REST_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip(
 # Fernet 金鑰，用來加密存放的 Google token。以 scripts/generate_keys.ps1 產生。
 TOKEN_ENCRYPTION_KEY = os.environ.get("TOKEN_ENCRYPTION_KEY", "").strip()
 
+# 晨間簡報端點的通行密碼。未設定則該端點一律拒絕，避免任何人都能觸發推播。
+CRON_SECRET = os.environ.get("CRON_SECRET", "").strip()
+
 # Google OAuth scopes for secretary features
 GOOGLE_SCOPES = [
     "openid",

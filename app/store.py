@@ -135,6 +135,34 @@ def delete(key: str) -> None:
             _local_save(data)
 
 
+def keys(pattern: str) -> list[str]:
+    """List keys matching a glob pattern (e.g. 'gtoken:*')."""
+    if using_remote():
+        found: list[str] = []
+        cursor = "0"
+        while True:
+            # SCAN 而非 KEYS：KEYS 在鍵多時會阻塞 Redis。
+            result = _command("SCAN", cursor, "MATCH", pattern, "COUNT", "100")
+            if not isinstance(result, list) or len(result) != 2:
+                break
+            cursor, batch = str(result[0]), result[1]
+            found.extend(k for k in (batch or []) if isinstance(k, str))
+            if cursor == "0":
+                break
+        return found
+
+    import fnmatch
+
+    with _lock:
+        data = _local_load()
+        candidates = [k for k in data if k != _EXPIRES_FIELD]
+        return [
+            k
+            for k in candidates
+            if fnmatch.fnmatch(k, pattern) and not _local_expired(data, k)
+        ]
+
+
 def healthy() -> bool:
     """Used at startup to fail loudly rather than on the first user message."""
     if not using_remote():

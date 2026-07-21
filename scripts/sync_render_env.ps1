@@ -87,6 +87,7 @@ $vars = @{
     UPSTASH_REDIS_REST_URL      = $null
     UPSTASH_REDIS_REST_TOKEN    = $null
     TOKEN_ENCRYPTION_KEY        = $null
+    CRON_SECRET                 = $null
     DATA_DIR                    = "/var/data"
     PYTHON_VERSION              = "3.12.0"
 }

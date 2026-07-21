@@ -11,10 +11,16 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "產生失敗。請先安裝相依套件：pip install -r requirements.txt"
 }
 
+# 晨間簡報端點的通行密碼，跟加密金鑰無關。
+# 用十六進位而非 base64：這個值會出現在 URL 查詢參數裡，
+# base64 的 '+' 會被解讀成空格、'/' 和 '=' 也需要跳脫。
+$cron = -join ((1..32) | ForEach-Object { "{0:x}" -f (Get-Random -Maximum 16) })
+
 Write-Host ""
-Write-Host "把這行加進 .env（若已存在請直接取代）："
+Write-Host "把這幾行加進 .env（若已存在請直接取代）："
 Write-Host ""
 Write-Host "TOKEN_ENCRYPTION_KEY=$key"
+Write-Host "CRON_SECRET=$cron"
 Write-Host ""
 Write-Host "接著同步到 Render："
 Write-Host "  .\scripts\sync_render_env.ps1 -ServiceName line-ai-secretary-gvxw"
