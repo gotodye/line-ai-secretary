@@ -1,79 +1,97 @@
-"""Simple JSON persistence for conversation memory and Google tokens."""
+"""Conversation memory and Google tokens, persisted via app.store."""
 
 from __future__ import annotations
 
 import json
+import logging
 import threading
-from pathlib import Path
 from typing import Any
 
-from app.config import DATA_DIR
+from app import crypto
+from app import store
 
+logger = logging.getLogger(__name__)
+
+# 單一 gunicorn worker 下足以避免同一使用者的讀改寫互相覆蓋。
 _lock = threading.Lock()
 
 
-def _path(name: str) -> Path:
-    return DATA_DIR / name
+def _history_key(user_id: str) -> str:
+    return f"history:{user_id}"
 
 
-def _load(name: str, default: Any) -> Any:
-    path = _path(name)
-    if not path.exists():
-        return default
+def _token_key(user_id: str) -> str:
+    return f"gtoken:{user_id}"
+
+
+def _load_history(user_id: str) -> list[dict[str, str]]:
+    raw = store.get(_history_key(user_id))
+    if not raw:
+        return []
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return default
-
-
-def _save(name: str, data: Any) -> None:
-    path = _path(name)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        items = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("對話記憶格式毀損，重置: %s", user_id)
+        return []
+    return items if isinstance(items, list) else []
 
 
 def get_history(user_id: str, limit: int = 12) -> list[dict[str, str]]:
-    with _lock:
-        store = _load("history.json", {})
-        items = store.get(user_id, [])
-        return items[-limit:]
+    try:
+        return _load_history(user_id)[-limit:]
+    except store.StoreError as exc:
+        # 記憶讀不到不該讓對話中斷，退化成無上下文繼續回答。
+        logger.error("讀取對話記憶失敗: %s", exc)
+        return []
 
 
 def append_history(user_id: str, role: str, text: str, limit: int = 40) -> None:
-    with _lock:
-        store = _load("history.json", {})
-        items = store.get(user_id, [])
-        items.append({"role": role, "text": text})
-        store[user_id] = items[-limit:]
-        _save("history.json", store)
+    try:
+        with _lock:
+            items = _load_history(user_id)
+            items.append({"role": role, "text": text})
+            store.set(
+                _history_key(user_id),
+                json.dumps(items[-limit:], ensure_ascii=False),
+            )
+    except store.StoreError as exc:
+        logger.error("寫入對話記憶失敗: %s", exc)
 
 
 def clear_history(user_id: str) -> None:
-    with _lock:
-        store = _load("history.json", {})
-        store.pop(user_id, None)
-        _save("history.json", store)
+    try:
+        store.delete(_history_key(user_id))
+    except store.StoreError as exc:
+        logger.error("清除對話記憶失敗: %s", exc)
 
 
 def get_google_token(user_id: str) -> dict | None:
-    with _lock:
-        store = _load("google_tokens.json", {})
-        return store.get(user_id)
+    """Token 讀寫失敗一律往上拋 — 靜默失敗會讓使用者以為授權還在。"""
+    raw = store.get(_token_key(user_id))
+    if not raw:
+        return None
+    decrypted = crypto.decrypt(raw)
+    try:
+        token = json.loads(decrypted)
+    except json.JSONDecodeError:
+        logger.error("Google token 格式毀損: %s", user_id)
+        return None
+    return token if isinstance(token, dict) else None
 
 
-def set_google_token(user_id: str, token_info: dict) -> None:
-    with _lock:
-        store = _load("google_tokens.json", {})
-        store[user_id] = token_info
-        _save("google_tokens.json", store)
+def set_google_token(user_id: str, token_info: dict[str, Any]) -> None:
+    payload = json.dumps(token_info, ensure_ascii=False)
+    store.set(_token_key(user_id), crypto.encrypt(payload))
 
 
 def delete_google_token(user_id: str) -> None:
-    with _lock:
-        store = _load("google_tokens.json", {})
-        store.pop(user_id, None)
-        _save("google_tokens.json", store)
+    store.delete(_token_key(user_id))
 
 
 def is_google_linked(user_id: str) -> bool:
-    token = get_google_token(user_id)
+    try:
+        token = get_google_token(user_id)
+    except (store.StoreError, RuntimeError) as exc:
+        logger.error("查詢 Google 連結狀態失敗: %s", exc)
+        return False
     return bool(token and (token.get("refresh_token") or token.get("token")))

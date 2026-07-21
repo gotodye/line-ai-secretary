@@ -99,8 +99,11 @@ https://line-ai-secretary.onrender.com/oauth/callback
 | `GOOGLE_CLIENT_ID` | 建議 | Google OAuth |
 | `GOOGLE_CLIENT_SECRET` | 建議 | Google OAuth |
 | `FLASK_SECRET_KEY` | 建議 | 隨機長字串（Render 可自動產生） |
+| `UPSTASH_REDIS_REST_URL` | ✅ | Upstash Console → Redis → REST API |
+| `UPSTASH_REDIS_REST_TOKEN` | ✅ | 同上 |
+| `TOKEN_ENCRYPTION_KEY` | ✅ | `pwsh scripts/generate_keys.ps1` 產生 |
 | `GEMINI_MODEL` | 選填 | 預設 `gemini-2.5-flash` |
-| `DATA_DIR` | 選填 | 有掛 Disk 時設 `/var/data` |
+| `DATA_DIR` | 選填 | 僅未設 Upstash 時的本機退路 |
 
 ## 注意事項
 
@@ -112,9 +115,18 @@ https://line-ai-secretary.onrender.com/oauth/callback
 
 ### Google Token 會不會消失？
 
-Free 方案重部署後，`data/` 可能清空，需重新在 LINE 傳「連結 Google」。
+不會 —— 前提是有設定 Upstash。
 
-若要持久保存：Render 付費方案加 **Persistent Disk**，掛在 `/var/data`，並設 `DATA_DIR=/var/data`（`render.yaml` 已預留註解）。
+Render Free 方案的檔案系統是暫存的，每次重部署或休眠重啟都會清空，所以 OAuth token 與對話記憶改存 **Upstash Redis**（免費方案永久有效，每日 10,000 次命令）。設定方式：
+
+1. [upstash.com](https://upstash.com) 註冊 → 建立 Redis 資料庫（區域選離 Render 服務近的）
+2. 資料庫頁面 → **REST API** 頁籤 → 複製 `UPSTASH_REDIS_REST_URL` 與 `UPSTASH_REDIS_REST_TOKEN`
+3. `pwsh scripts/generate_keys.ps1` 產生 `TOKEN_ENCRYPTION_KEY`
+4. 三個值填進 `.env`，執行 `.\scripts\sync_render_env.ps1 -ServiceName <你的服務名>`
+
+Token 以 Fernet 加密後才寫入 Upstash，儲存端看不到明文。**更換 `TOKEN_ENCRYPTION_KEY` 會讓既有 token 全部失效**，所有使用者需重新連結。
+
+三個變數缺一不可：設定不完整時 gunicorn 會直接開機失敗並在日誌說明原因，而不是默默以明文或暫存模式運行。未設 Upstash 時服務仍可啟動（退回本機檔案），但日誌會持續警告。
 
 ### 自動部署
 

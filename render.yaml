@@ -10,8 +10,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"
+      # 只在 Upstash 未設定時用到的退路，內容不保證留存。
       - key: DATA_DIR
-        value: /var/data
+        value: /tmp/line-ai-data
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: LINE_CHANNEL_SECRET
@@ -30,8 +31,10 @@ services:
         sync: false
       - key: GOOGLE_REDIRECT_URI
         sync: false
-    # Optional: paid plan persistent disk so Google OAuth tokens survive redeploys
-    # disk:
-    #   name: line-ai-data
-    #   mountPath: /var/data
-    #   sizeGB: 1
+      # 外部儲存：免費方案的檔案系統是暫存的，授權與對話記憶都靠這組保存。
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false

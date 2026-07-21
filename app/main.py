@@ -9,6 +9,7 @@ from flask import Flask, abort, request
 from linebot.v3.exceptions import InvalidSignatureError
 
 from app import config
+from app import store
 from app.google_oauth import exchange_code
 from app.line_bot import handler
 
@@ -17,6 +18,17 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# 在 import 時就驗證，讓設定錯誤直接讓 gunicorn 開機失敗、部署顯示紅燈，
+# 而不是等到第一個使用者訊息才炸。main() 在 gunicorn 下不會被呼叫。
+config.require_store_config()
+if not config.remote_store_configured():
+    logger.warning(
+        "未設定外部儲存，資料寫在本機檔案。"
+        "Render 免費方案重啟即清空，正式環境請設定 UPSTASH_REDIS_REST_URL / TOKEN。"
+    )
+elif not store.healthy():
+    logger.error("外部儲存連線失敗，Google 授權與對話記憶將無法保存")
 
 app = Flask(__name__)
 app.secret_key = config.FLASK_SECRET_KEY
@@ -29,6 +41,7 @@ def index():
         "status": "ok",
         "google_oauth_configured": config.google_oauth_configured(),
         "base_url": config.BASE_URL or None,
+        "storage": "upstash-redis" if config.remote_store_configured() else "local-file",
         "webhook": "/callback",
         "oauth_callback": "/oauth/callback",
     }
@@ -36,6 +49,10 @@ def index():
 
 @app.get("/health")
 def health():
+    # 保持零外部呼叫：這支被 Render 高頻輪詢，每次都 PING Upstash 會吃光免費額度。
+    # 要檢查儲存連線請用 /health?deep=1。
+    if request.args.get("deep"):
+        return {"ok": True, "storage_ok": store.healthy()}
     return {"ok": True}
 
 
@@ -64,9 +81,10 @@ def oauth_callback():
 
     try:
         exchange_code(code, state)
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        # 細節只寫進 log，不回傳給終端使用者
         logger.exception("OAuth exchange failed")
-        return f"<h3>授權交換失敗</h3><pre>{e}</pre>", 500
+        return "<h3>授權交換失敗</h3><p>請回到 LINE 重新傳送「連結 Google」再試一次。</p>", 500
 
     return (
         "<h2>Google 帳號已連結成功</h2>"
