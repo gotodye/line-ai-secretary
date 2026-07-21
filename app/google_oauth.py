@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
+import os
 
-from app import config
-from app import memory
+# Google 回傳的 scope 常與請求時不完全一致：openid 會被補上 userinfo 相關項目，
+# include_granted_scopes 也會把先前已授權的 scope 一併帶回來。oauthlib 預設會把
+# 這種差異當成錯誤直接擋下（Scope has changed from ... to ...），導致換 token 失敗。
+# 必須在 import oauthlib 之前設定才有效。
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+
+from google.auth.transport.requests import Request  # noqa: E402
+from google.oauth2.credentials import Credentials  # noqa: E402
+from google_auth_oauthlib.flow import Flow  # noqa: E402
+
+from app import config  # noqa: E402
+from app import memory  # noqa: E402
 
 
 class GoogleNotLinkedError(RuntimeError):
