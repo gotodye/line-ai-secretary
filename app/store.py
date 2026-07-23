@@ -31,10 +31,15 @@ def using_remote() -> bool:
     return config.remote_store_configured()
 
 
+# 每個指令都用 requests.post 會重新建立 TCP + TLS 連線；一則訊息至少兩個
+# 指令，等於白付兩次握手。用 Session 保持連線重用。
+_session = requests.Session()
+
+
 def _command(*args: str) -> object:
     """Run a Redis command through the Upstash REST endpoint."""
     try:
-        resp = requests.post(
+        resp = _session.post(
             config.UPSTASH_REDIS_REST_URL,
             headers={"Authorization": f"Bearer {config.UPSTASH_REDIS_REST_TOKEN}"},
             json=[str(a) for a in args],
