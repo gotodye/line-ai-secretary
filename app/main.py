@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import threading
 
 from flask import Flask, abort, request
 from linebot.v3.exceptions import InvalidSignatureError
@@ -72,9 +73,19 @@ def cron_brief():
         logger.warning("晨間簡報請求的密碼不正確")
         return {"error": "unauthorized"}, 401
 
-    result = briefing.send_briefs(push_text)
-    logger.info("晨間簡報結果: %s", result)
-    return result
+    # 一位使用者的簡報要跑 20 秒以上（多次 Gemini 呼叫加工具查詢），多位使用者
+    # 就是好幾十秒；排程服務的請求逾時通常只有 30 秒，同步處理必定被中斷。
+    # 立刻回應、背景執行，簡報本來就是靠推播送達，不需要留在這個連線裡。
+    def work() -> None:
+        try:
+            logger.info("晨間簡報開始")
+            result = briefing.send_briefs(push_text)
+            logger.info("晨間簡報結果: %s", result)
+        except Exception:  # noqa: BLE001
+            logger.exception("晨間簡報執行失敗")
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"status": "accepted"}, 202
 
 
 @app.post("/callback")
