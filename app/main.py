@@ -59,6 +59,15 @@ def health():
     return {"ok": True}
 
 
+@app.get("/ping")
+def ping():
+    # 專供 keep-alive 排程使用：回傳完全空的 204。
+    # 某些排程服務（如 cron-job.org）的抓取器對經 Cloudflare 的 chunked 回應
+    # 會誤判「output too large」——即使 body 只有十幾個位元組。零 body 讓這個
+    # 判斷無從成立，喚醒服務只需要一個 2xx 就夠了。
+    return "", 204
+
+
 @app.post("/cron/brief")
 @app.get("/cron/brief")
 def cron_brief():
@@ -85,7 +94,8 @@ def cron_brief():
             logger.exception("晨間簡報執行失敗")
 
     threading.Thread(target=work, daemon=True).start()
-    return {"status": "accepted"}, 202
+    # 空 body：與 /ping 同理，避免排程服務誤判回應過大。
+    return "", 202
 
 
 @app.post("/callback")
