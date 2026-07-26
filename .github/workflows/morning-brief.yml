@@ -1,0 +1,30 @@
+name: Morning Brief
+
+# 每天早上推播晨間簡報。先確實叫醒服務，再觸發簡報，
+# 所以就算服務原本是睡的、或 keep-alive 剛好漏了幾次，也不受影響。
+on:
+  schedule:
+    # 台北 07:20（UTC 23:20）。GitHub 排程可能延遲數分鐘，可接受。
+    - cron: "20 23 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake service (等滿冷啟動)
+        run: |
+          echo "喚醒服務，等待冷啟動完成…"
+          curl -fsS --max-time 120 \
+            --retry 6 --retry-all-errors --retry-delay 15 \
+            https://line-ai-secretary-gvxw.onrender.com/ping
+          echo "服務已就緒"
+
+      - name: Trigger brief (帶密碼觸發)
+        run: |
+          echo "觸發晨間簡報…"
+          curl -fsS --max-time 60 \
+            --retry 3 --retry-all-errors --retry-delay 10 \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            https://line-ai-secretary-gvxw.onrender.com/cron/brief
+          echo "已受理，簡報將於背景推播到 LINE"
