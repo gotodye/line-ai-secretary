@@ -8,6 +8,10 @@ on:
     # 時間最嚴重，所以刻意提早、並用冷門的 :47 分鐘來壓低佇列延遲，讓實際
     # 送達大致落在 07:00-07:45 之間，而非飄到 8 點多。
     - cron: "47 22 * * *"
+    # 備援：台北 07:17。GitHub 偶爾配不到 runner 導致整個 job 沒跑起來，
+    # 這時第二次觸發補上。伺服器端有「當天已寄就跳過」的冪等判斷，正常日子
+    # 第一次已寄，這次自動變無動作，不會重複打擾。
+    - cron: "17 23 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -24,9 +28,14 @@ jobs:
 
       - name: Trigger brief (帶密碼觸發)
         run: |
-          echo "觸發晨間簡報…"
+          # 手動觸發（測試）帶 force=1 強制重寄；排程觸發維持冪等（當天已寄就跳過）。
+          URL="https://line-ai-secretary-gvxw.onrender.com/cron/brief"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            URL="${URL}?force=1"
+          fi
+          echo "觸發晨間簡報… ($URL)"
           curl -fsS --max-time 60 \
             --retry 3 --retry-all-errors --retry-delay 10 \
             -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
-            https://line-ai-secretary-gvxw.onrender.com/cron/brief
+            "$URL"
           echo "已受理，簡報將於背景推播到 LINE"

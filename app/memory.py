@@ -192,6 +192,24 @@ def list_linked_users() -> list[str]:
         return []
 
 
+def get_brief_sent_date(user_id: str) -> str | None:
+    """The date (Taipei) the morning brief was last delivered to this user."""
+    try:
+        return store.get(f"briefed:{user_id}")
+    except store.StoreError as exc:
+        logger.error("讀取簡報寄送紀錄失敗: %s", exc)
+        # 讀不到時當作「尚未寄送」——寧可重寄，也不要漏寄。
+        return None
+
+
+def mark_brief_sent(user_id: str, date_str: str) -> None:
+    try:
+        # 兩天後自動過期，避免使用者解除連結後殘留鍵；每天照樣會被新日期覆蓋。
+        store.set(f"briefed:{user_id}", date_str, ttl_seconds=172800)
+    except store.StoreError as exc:
+        logger.error("寫入簡報寄送紀錄失敗: %s", exc)
+
+
 def is_google_linked(user_id: str) -> bool:
     try:
         token = get_google_token(user_id)
