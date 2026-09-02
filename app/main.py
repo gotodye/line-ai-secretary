@@ -155,6 +155,14 @@ def ms_oauth_callback():
             "請聯絡公司 IT 於 Azure 授權此應用程式。</p>"
         ), 400
 
+    # 管理員透過 /adminconsent 授權後會導回這裡，帶的是 admin_consent/tenant
+    # 而非 code。給個友善頁面，別讓管理員看到「缺少 code」的錯誤。
+    if request.args.get("admin_consent") or (request.args.get("tenant") and not request.args.get("code")):
+        return (
+            "<h2>管理員同意已完成</h2>"
+            "<p>公司已授權此應用程式。請通知使用者回到 LINE 重新傳送「連結 Outlook」。</p>"
+        )
+
     code = request.args.get("code")
     state = request.args.get("state")  # LINE user id
     if not code or not state:
