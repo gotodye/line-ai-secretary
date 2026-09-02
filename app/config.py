@@ -28,6 +28,17 @@ GOOGLE_REDIRECT_URI = os.environ.get(
     f"{BASE_URL}/oauth/callback" if BASE_URL else "",
 ).strip()
 
+# Microsoft (Outlook / Microsoft 365) OAuth — Azure Entra ID 應用程式
+MS_CLIENT_ID = os.environ.get("MS_CLIENT_ID", "").strip()
+MS_CLIENT_SECRET = os.environ.get("MS_CLIENT_SECRET", "").strip()
+MS_TENANT_ID = os.environ.get("MS_TENANT_ID", "").strip()
+MS_REDIRECT_URI = os.environ.get(
+    "MS_REDIRECT_URI",
+    f"{BASE_URL}/oauth/ms/callback" if BASE_URL else "",
+).strip()
+# offline_access 換 refresh token；Mail.Read 讀信；User.Read 取基本個資。
+MS_SCOPES = ["offline_access", "User.Read", "Mail.Read"]
+
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
@@ -70,6 +81,12 @@ def require_line_config() -> None:
 
 def google_oauth_configured() -> bool:
     return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI)
+
+
+def ms_oauth_configured() -> bool:
+    return bool(
+        MS_CLIENT_ID and MS_CLIENT_SECRET and MS_TENANT_ID and MS_REDIRECT_URI
+    )
 
 
 def remote_store_configured() -> bool:

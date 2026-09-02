@@ -47,10 +47,21 @@ _BRIEF_REQUEST = """請幫我準備今天的晨間簡報。
 """
 
 
+_OUTLOOK_STEP = (
+    "\n\n此外，這位使用者也連結了 Outlook：另外呼叫 list_recent_outlook_emails "
+    "查 Outlook 未讀信，和 Gmail 的未讀信一起套用上面同樣的兩類分法，但在每封前面"
+    "標明來源（Gmail／Outlook），讓我知道是哪個信箱。"
+)
+
+
 def build_brief(user_id: str) -> str:
     """Generate one user's brief. Reuses the normal tool loop."""
+    prompt = _BRIEF_REQUEST
+    # 只有連了 Outlook 的人才叫模型去查，避免其他人每天多打一次注定失敗的工具。
+    if memory.is_ms_linked(user_id):
+        prompt += _OUTLOOK_STEP
     # 不帶對話歷史：簡報是獨立的一次性任務，混入昨天的閒聊只會干擾。
-    return gemini_client.chat(user_id, _BRIEF_REQUEST, history=[])
+    return gemini_client.chat(user_id, prompt, history=[])
 
 
 def send_briefs(push_fn, force: bool = False) -> dict:

@@ -88,13 +88,17 @@ $vars = @{
     UPSTASH_REDIS_REST_TOKEN    = $null
     TOKEN_ENCRYPTION_KEY        = $null
     CRON_SECRET                 = $null
+    MS_CLIENT_ID                = $null
+    MS_CLIENT_SECRET            = $null
+    MS_TENANT_ID                = $null
+    MS_REDIRECT_URI             = "$baseUrl/oauth/ms/callback"
     DATA_DIR                    = "/var/data"
     PYTHON_VERSION              = "3.12.0"
 }
 
 # BASE_URL / GOOGLE_REDIRECT_URI 一律以 Render 實際網址為準，不讓 .env 覆蓋，
 # 否則 .env 裡的舊網址會被同步上線，OAuth 就會導回錯誤（甚至已停用）的網域。
-$derivedOnly = @("BASE_URL", "GOOGLE_REDIRECT_URI")
+$derivedOnly = @("BASE_URL", "GOOGLE_REDIRECT_URI", "MS_REDIRECT_URI")
 
 Get-Content $EnvFile | ForEach-Object {
     if ($_ -match '^\s*([A-Z_]+)\s*=\s*(.*)$') {

@@ -6,6 +6,8 @@ from app import config
 from app import gemini_client
 from app import memory
 from app.google_oauth import GoogleNotConfiguredError, build_auth_url
+from app.ms_oauth import MSNotConfiguredError
+from app.ms_oauth import build_auth_url as ms_build_auth_url
 
 # 帶進模型的對話輪數；儲存端保留較多，這裡只取最近的。
 HISTORY_TURNS = 12
@@ -28,6 +30,8 @@ HELP_TEXT = """我是你的 AI 秘書，可以：
 ・說明 / 幫助 — 顯示此說明
 ・連結 Google — 授權 Google 帳號
 ・解除 Google — 取消授權
+・連結 Outlook — 授權 Outlook / Microsoft 365
+・解除 Outlook — 取消 Outlook 授權
 ・清除對話 — 忘掉近期對話
 ・記憶 — 列出我記住的事
 ・忘記 XXX — 忘掉某件事
@@ -66,12 +70,12 @@ def handle_text(
         return HELP_TEXT
 
     if cmd in ("狀態", "status"):
-        linked = memory.is_google_linked(user_id)
-        oauth_ok = config.google_oauth_configured()
         return (
             f"Gemini 模型：{config.GEMINI_MODEL}\n"
-            f"Google OAuth 設定：{'已設定' if oauth_ok else '未設定'}\n"
-            f"你的 Google 帳號：{'已連結' if linked else '未連結'}\n"
+            f"Google OAuth 設定：{'已設定' if config.google_oauth_configured() else '未設定'}\n"
+            f"你的 Google 帳號：{'已連結' if memory.is_google_linked(user_id) else '未連結'}\n"
+            f"Outlook OAuth 設定：{'已設定' if config.ms_oauth_configured() else '未設定'}\n"
+            f"你的 Outlook 帳號：{'已連結' if memory.is_ms_linked(user_id) else '未連結'}\n"
             f"公開網址 BASE_URL：{config.BASE_URL or '（未設定）'}"
         )
 
@@ -112,6 +116,27 @@ def handle_text(
             "請用手機瀏覽器開啟以下連結，登入並允許存取：\n\n"
             f"{url}\n\n"
             "授權完成後回到 LINE，就可以查日曆、郵件、Drive、待辦了。"
+        )
+
+    if cmd in ("解除Outlook", "解除outlook", "取消Outlook"):
+        memory.delete_ms_token(user_id)
+        return "已解除 Outlook 帳號連結。"
+
+    if cmd in ("連結Outlook", "連結outlook", "連接Outlook", "授權Outlook"):
+        if not config.ms_oauth_configured():
+            return (
+                "伺服器尚未設定 Outlook（Microsoft）OAuth。\n"
+                "請設定 MS_CLIENT_ID、MS_CLIENT_SECRET、MS_TENANT_ID。"
+            )
+        try:
+            url = ms_build_auth_url(user_id)
+        except MSNotConfiguredError as e:
+            return str(e)
+        return (
+            "請用手機瀏覽器開啟以下連結，登入公司 Microsoft 帳號並允許存取：\n\n"
+            f"{url}\n\n"
+            "授權完成後回到 LINE，就可以查 Outlook 未讀信了。\n"
+            "（若畫面說需要管理員核准，請聯絡公司 IT。）"
         )
 
     # Default: Gemini with tools

@@ -15,6 +15,7 @@ from app import config
 from app import store
 from app.google_oauth import exchange_code
 from app.line_bot import handler, push_text
+from app.ms_oauth import exchange_code as ms_exchange_code
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,10 +44,12 @@ def index():
         "service": "line-ai-secretary",
         "status": "ok",
         "google_oauth_configured": config.google_oauth_configured(),
+        "ms_oauth_configured": config.ms_oauth_configured(),
         "base_url": config.BASE_URL or None,
         "storage": "upstash-redis" if config.remote_store_configured() else "local-file",
         "webhook": "/callback",
         "oauth_callback": "/oauth/callback",
+        "ms_oauth_callback": "/oauth/ms/callback",
     }
 
 
@@ -135,6 +138,38 @@ def oauth_callback():
         "<h2>Google 帳號已連結成功</h2>"
         "<p>可以關閉此頁，回到 LINE 跟秘書說話了。</p>"
         "<p>試試：「今天有什麼行程？」「有哪些未讀信件？」</p>"
+    )
+
+
+@app.get("/oauth/ms/callback")
+def ms_oauth_callback():
+    error = request.args.get("error")
+    if error:
+        desc = request.args.get("error_description", "")
+        logger.warning("Microsoft 授權失敗: %s %s", error, desc[:200])
+        # 常見：需要系統管理員同意（AADSTS65001 等）——提示使用者找 IT。
+        return (
+            "<h3>Outlook 授權失敗</h3>"
+            f"<p>{error}</p>"
+            "<p>若訊息提到需要管理員核准（admin consent），"
+            "請聯絡公司 IT 於 Azure 授權此應用程式。</p>"
+        ), 400
+
+    code = request.args.get("code")
+    state = request.args.get("state")  # LINE user id
+    if not code or not state:
+        return "<h3>缺少 code 或 state</h3>", 400
+
+    try:
+        ms_exchange_code(code, state)
+    except Exception:  # noqa: BLE001
+        logger.exception("Microsoft OAuth exchange failed")
+        return "<h3>授權交換失敗</h3><p>請回到 LINE 重新傳送「連結 Outlook」再試一次。</p>", 500
+
+    return (
+        "<h2>Outlook 帳號已連結成功</h2>"
+        "<p>可以關閉此頁，回到 LINE。</p>"
+        "<p>試試：「Outlook 有什麼未讀信？」</p>"
     )
 
 

@@ -41,3 +41,10 @@ services:
       # 晨間簡報端點的通行密碼；未設定時該端點不啟用。
       - key: CRON_SECRET
         sync: false
+      # Outlook / Microsoft 365（選填）
+      - key: MS_CLIENT_ID
+        sync: false
+      - key: MS_CLIENT_SECRET
+        sync: false
+      - key: MS_TENANT_ID
+        sync: false

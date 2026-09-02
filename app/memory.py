@@ -24,6 +24,10 @@ def _token_key(user_id: str) -> str:
     return f"gtoken:{user_id}"
 
 
+def _ms_token_key(user_id: str) -> str:
+    return f"mstoken:{user_id}"
+
+
 def _facts_key(user_id: str) -> str:
     return f"facts:{user_id}"
 
@@ -125,6 +129,36 @@ def set_google_token(user_id: str, token_info: dict[str, Any]) -> None:
 
 def delete_google_token(user_id: str) -> None:
     store.delete(_token_key(user_id))
+
+
+def get_ms_token(user_id: str) -> dict | None:
+    """Microsoft (Outlook) token，加密存放，讀寫失敗往上拋。"""
+    raw = store.get(_ms_token_key(user_id))
+    if not raw:
+        return None
+    try:
+        token = json.loads(crypto.decrypt(raw))
+    except json.JSONDecodeError:
+        logger.error("Microsoft token 格式毀損: %s", user_id)
+        return None
+    return token if isinstance(token, dict) else None
+
+
+def set_ms_token(user_id: str, token_info: dict[str, Any]) -> None:
+    store.set(_ms_token_key(user_id), crypto.encrypt(json.dumps(token_info, ensure_ascii=False)))
+
+
+def delete_ms_token(user_id: str) -> None:
+    store.delete(_ms_token_key(user_id))
+
+
+def is_ms_linked(user_id: str) -> bool:
+    try:
+        token = get_ms_token(user_id)
+    except (store.StoreError, RuntimeError) as exc:
+        logger.error("查詢 Outlook 連結狀態失敗: %s", exc)
+        return False
+    return bool(token and token.get("refresh_token"))
 
 
 def get_facts(user_id: str) -> list[str]:
