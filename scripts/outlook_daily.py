@@ -38,7 +38,7 @@ UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip()
 
 STATE_FILE = ROOT / "data" / "outlook_state.json"
-SERVE_POLL_SECONDS = 20   # --serve 輪詢雲端旗標的間隔
+SERVE_POLL_SECONDS = 15   # --serve 每隔幾秒檢查一次雲端旗標（隱形背景，不閃視窗）
 MAX_PROCESS = 40          # 一次最多處理幾封新信（電腦關很久、累積太多時的上限）
 DEFAULT_LOOKBACK_H = 24   # 沒有浮水印時往回讀幾小時
 
@@ -211,35 +211,91 @@ def _upstash(*args: str):
     return resp.json().get("result")
 
 
+def _serve_log(msg: str) -> None:
+    line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
+    print(line)
+    try:
+        log = ROOT / "logs" / "outlook_serve.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
 def serve() -> int:
-    """常駐輪詢雲端旗標；使用者在 LINE 傳「Outlook 信件」→ 這裡觸發一次讀取。"""
+    """常駐（隱形）輪詢雲端旗標；使用者在 LINE 傳「Outlook 信件」→ 觸發一次讀取。
+
+    以 pythonw 背景執行，沒有任何視窗；內部每隔幾秒問一次雲端旗標，不會每分鐘
+    啟動新程式閃黑視窗。
+    """
     if not (UPSTASH_URL and UPSTASH_TOKEN and OWNER_USER_ID):
-        print("缺少 UPSTASH_REDIS_REST_URL / TOKEN / LINE_OWNER_USER_ID，無法 --serve")
+        _serve_log("缺少 UPSTASH / LINE_OWNER_USER_ID，無法 --serve")
         return 1
+
+    # 單一實例：用具名 mutex（原子、無競態）。已存在就代表另一個看守在跑。
+    import ctypes
+
+    _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "LINE_Outlook_Watcher_Mutex")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        _serve_log("已有看守在跑，本次不啟動。")
+        return 0
+
     key = f"outlook_req:{OWNER_USER_ID}"
-    print(f"看守啟動：每 {SERVE_POLL_SECONDS}s 輪詢 {key}。傳「Outlook 信件」到 LINE 即可觸發。")
+    _serve_log(f"看守啟動（pid {os.getpid()}），每 {SERVE_POLL_SECONDS}s 檢查一次。")
     import time as _t
 
     while True:
         try:
             val = _upstash("GET", key)
             if val:
-                _upstash("DEL", key)  # 消費掉，避免重複觸發
-                print(f"[{datetime.now():%H:%M:%S}] 收到讀取請求，開始讀 Outlook...")
+                _upstash("DEL", key)
+                _serve_log("收到讀取請求，開始讀 Outlook...")
                 try:
                     run_once()
                 except Exception as e:  # noqa: BLE001
-                    print(f"讀取失敗：{e}")
+                    _serve_log(f"讀取失敗：{e}")
                     try:
                         push_to_line(f"⚠️ Outlook 讀取失敗：{e}")
                     except Exception:
                         pass
-        except Exception as e:  # noqa: BLE001 — 輪詢錯誤不該讓看守掛掉
-            print(f"輪詢錯誤（略過本次）：{e}")
+        except Exception as e:  # noqa: BLE001
+            _serve_log(f"輪詢錯誤（略過本次）：{e}")
         _t.sleep(SERVE_POLL_SECONDS)
 
 
+def check_once() -> int:
+    """檢查一次雲端旗標；有請求就讀+推，沒有就秒退。供每分鐘排程呼叫。"""
+    if not (UPSTASH_URL and UPSTASH_TOKEN and OWNER_USER_ID):
+        print("缺少 UPSTASH / LINE_OWNER_USER_ID 設定")
+        return 1
+    key = f"outlook_req:{OWNER_USER_ID}"
+    try:
+        val = _upstash("GET", key)
+    except Exception as e:  # noqa: BLE001
+        print(f"讀旗標失敗（略過）：{e}")
+        return 0
+    if not val:
+        return 0  # 沒有請求，安靜退出
+    try:
+        _upstash("DEL", key)  # 消費掉
+    except Exception:
+        pass
+    print(f"[{datetime.now():%H:%M:%S}] 收到 LINE 讀取請求，開始讀 Outlook...")
+    try:
+        return run_once()
+    except Exception as e:  # noqa: BLE001
+        print(f"讀取失敗：{e}")
+        try:
+            push_to_line(f"⚠️ Outlook 讀取失敗：{e}")
+        except Exception:
+            pass
+        return 1
+
+
 def main(argv: list[str]) -> int:
+    if "--check" in argv:
+        return check_once()
     if "--serve" in argv:
         return serve()
 
