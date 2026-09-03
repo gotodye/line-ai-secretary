@@ -12,9 +12,7 @@ from google.genai import types
 from app import config
 from app import google_services as gsvc
 from app import memory
-from app import ms_services
 from app.google_oauth import GoogleNotLinkedError
-from app.ms_oauth import MSNotLinkedError
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +24,9 @@ _BASE_PROMPT = """你是使用者的私人秘書，透過 LINE 與對方溝通�
 原則：
 - 使用繁體中文，簡潔、條理清楚。
 - 需要查日曆、郵件、雲端硬碟、待辦、試算表時，請呼叫對應工具，不要臆造資料。
-- 信箱有兩個且各自獨立：Gmail 用 list_recent_emails，Outlook／Microsoft 365
-  用 list_recent_outlook_emails。使用者說「信」而沒指定哪個時，兩個都查。
+- 你能查的信箱是 Gmail（list_recent_emails）。Outlook／公司信箱不由你處理，
+  由使用者電腦上的本機讀取器負責；使用者要 Outlook 時不要說「未連結」，
+  直接告訴他傳「Outlook 信件」即可。
 - 需要即時資訊（天氣、新聞、股價、任何你不確定或可能已過時的事實）時，
   呼叫 web_search，不要憑記憶回答。
 - 若工具回傳尚未連結 Google，請引導使用者傳送「連結 Google」。
@@ -213,20 +212,6 @@ TOOL_DECLARATIONS = [
         ),
     ),
     types.FunctionDeclaration(
-        name="list_recent_outlook_emails",
-        description=(
-            "讀取使用者 Outlook / Microsoft 365 信箱最近的信件（預設只列未讀）。"
-            "這是與 Gmail 不同的另一個信箱。若回傳尚未連結，引導使用者傳「連結 Outlook」。"
-        ),
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "max_results": types.Schema(type=types.Type.INTEGER, description="最多幾封，預設 8"),
-                "unread_only": types.Schema(type=types.Type.BOOLEAN, description="只看未讀，預設 true"),
-            },
-        ),
-    ),
-    types.FunctionDeclaration(
         name="remember_fact",
         description=(
             "把關於使用者的長期事實記下來，跨對話保存。"
@@ -302,7 +287,6 @@ def _tool_impl_map(user_id: str) -> dict[str, Callable[..., Any]]:
         "list_tasks": lambda **kw: gsvc.list_tasks(user_id, **kw),
         "create_task": lambda **kw: gsvc.create_task(user_id, **kw),
         "read_sheet": lambda **kw: gsvc.read_sheet(user_id, **kw),
-        "list_recent_outlook_emails": lambda **kw: ms_services.list_recent_outlook_emails(user_id, **kw),
         "web_search": lambda **kw: web_search(**kw),
         "remember_fact": lambda **kw: {"result": memory.add_fact(user_id, **kw)},
         "forget_fact": lambda **kw: {"result": memory.remove_fact(user_id, **kw)},
@@ -315,7 +299,7 @@ def _run_tool(user_id: str, name: str, args: dict) -> Any:
         if not fn:
             return {"error": f"未知工具: {name}"}
         return fn(**(args or {}))
-    except (GoogleNotLinkedError, MSNotLinkedError) as e:
+    except GoogleNotLinkedError as e:
         return {"error": str(e), "need_link": True}
     except Exception as e:  # noqa: BLE001 — surface to model
         logger.exception("Tool %s failed", name)

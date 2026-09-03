@@ -12,6 +12,7 @@
     python scripts/outlook_daily.py --full      # 忽略浮水印，讀過去 24 小時（重讀用）
     python scripts/outlook_daily.py --reset      # 只清掉浮水印（下次從過去 24h 起算）
     python scripts/outlook_daily.py --sample     # 用假資料測試格式與推播（不碰 Outlook）
+    python scripts/outlook_daily.py --serve      # 常駐：輪詢雲端旗標，使用者在 LINE 傳「Outlook 信件」時觸發讀取
 """
 
 from __future__ import annotations
@@ -33,7 +34,11 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
 OWNER_USER_ID = os.environ.get("LINE_OWNER_USER_ID", "").strip()
 
+UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/")
+UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip()
+
 STATE_FILE = ROOT / "data" / "outlook_state.json"
+SERVE_POLL_SECONDS = 20   # --serve 輪詢雲端旗標的間隔
 MAX_PROCESS = 40          # 一次最多處理幾封新信（電腦關很久、累積太多時的上限）
 DEFAULT_LOOKBACK_H = 24   # 沒有浮水印時往回讀幾小時
 
@@ -160,29 +165,8 @@ def push_to_line(text: str) -> None:
         raise RuntimeError(f"LINE 推播失敗 HTTP {resp.status_code}: {resp.text[:200]}")
 
 
-def main(argv: list[str]) -> int:
-    dry_run = "--dry-run" in argv
-    full = "--full" in argv
-
-    if "--reset" in argv:
-        STATE_FILE.unlink(missing_ok=True)
-        print("已清除浮水印。")
-        return 0
-
-    if "--sample" in argv:
-        text = triage([
-            {"from": "Domingo (Metrobank)", "email": "x@metrobank.com.ph", "to": "Angus", "cc": "",
-             "subject": "Re: KYC Documents_EUI Hong Kong",
-             "body": "Hi Angus, Huang Yu Hsin is required to resubmit these forms. May I seek updates please."},
-            {"from": "Kasikorn", "email": "x@kbank.com", "to": "Angus", "cc": "",
-             "subject": "Credit Advice IR2609 EASTERN UNION",
-             "body": "This is to advise the credit of USD... (入帳通知)"},
-        ])
-        print("-" * 50); print(text); print("-" * 50)
-        if not dry_run:
-            push_to_line(text); print("已推播 ✓")
-        return 0
-
+def run_once(dry_run: bool = False, full: bool = False) -> int:
+    """讀上次之後的新信、判讀、推播、推進浮水印。回傳 0=成功。"""
     watermark = None if full else _load_watermark()
     cutoff = watermark or (datetime.now() - timedelta(hours=DEFAULT_LOOKBACK_H))
     print(f"讀取 {cutoff:%Y-%m-%d %H:%M} 之後的新信...")
@@ -210,11 +194,78 @@ def main(argv: list[str]) -> int:
 
     push_to_line(text)
     print("已推播到 LINE ✓")
-    # 只有成功推播後才推進浮水印，避免漏信
-    if emails and newest:
+    if emails and newest:  # 成功推播後才推進浮水印，避免漏信
         _save_watermark(newest)
         print(f"浮水印更新到 {newest:%Y-%m-%d %H:%M}")
     return 0
+
+
+def _upstash(*args: str):
+    resp = requests.post(
+        UPSTASH_URL,
+        headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
+        json=list(args),
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json().get("result")
+
+
+def serve() -> int:
+    """常駐輪詢雲端旗標；使用者在 LINE 傳「Outlook 信件」→ 這裡觸發一次讀取。"""
+    if not (UPSTASH_URL and UPSTASH_TOKEN and OWNER_USER_ID):
+        print("缺少 UPSTASH_REDIS_REST_URL / TOKEN / LINE_OWNER_USER_ID，無法 --serve")
+        return 1
+    key = f"outlook_req:{OWNER_USER_ID}"
+    print(f"看守啟動：每 {SERVE_POLL_SECONDS}s 輪詢 {key}。傳「Outlook 信件」到 LINE 即可觸發。")
+    import time as _t
+
+    while True:
+        try:
+            val = _upstash("GET", key)
+            if val:
+                _upstash("DEL", key)  # 消費掉，避免重複觸發
+                print(f"[{datetime.now():%H:%M:%S}] 收到讀取請求，開始讀 Outlook...")
+                try:
+                    run_once()
+                except Exception as e:  # noqa: BLE001
+                    print(f"讀取失敗：{e}")
+                    try:
+                        push_to_line(f"⚠️ Outlook 讀取失敗：{e}")
+                    except Exception:
+                        pass
+        except Exception as e:  # noqa: BLE001 — 輪詢錯誤不該讓看守掛掉
+            print(f"輪詢錯誤（略過本次）：{e}")
+        _t.sleep(SERVE_POLL_SECONDS)
+
+
+def main(argv: list[str]) -> int:
+    if "--serve" in argv:
+        return serve()
+
+    if "--reset" in argv:
+        STATE_FILE.unlink(missing_ok=True)
+        print("已清除浮水印。")
+        return 0
+
+    dry_run = "--dry-run" in argv
+    full = "--full" in argv
+
+    if "--sample" in argv:
+        text = triage([
+            {"from": "Domingo (Metrobank)", "email": "x@metrobank.com.ph", "to": "Angus", "cc": "",
+             "subject": "Re: KYC Documents_EUI Hong Kong",
+             "body": "Hi Angus, Huang Yu Hsin is required to resubmit these forms. May I seek updates please."},
+            {"from": "Kasikorn", "email": "x@kbank.com", "to": "Angus", "cc": "",
+             "subject": "Credit Advice IR2609 EASTERN UNION",
+             "body": "This is to advise the credit of USD... (入帳通知)"},
+        ])
+        print("-" * 50); print(text); print("-" * 50)
+        if not dry_run:
+            push_to_line(text); print("已推播 ✓")
+        return 0
+
+    return run_once(dry_run=dry_run, full=full)
 
 
 if __name__ == "__main__":

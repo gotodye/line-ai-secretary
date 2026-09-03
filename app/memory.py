@@ -152,6 +152,20 @@ def delete_ms_token(user_id: str) -> None:
     store.delete(_ms_token_key(user_id))
 
 
+def request_outlook_read(user_id: str) -> None:
+    """雲端收到「讀 Outlook」指令時記一個旗標；使用者電腦上的看守程式會輪詢它。
+
+    Outlook 只能在使用者本機的傳統版 Outlook 讀，雲端碰不到，所以用這個
+    共享旗標當作 雲端→本機 的觸發訊號。10 分鐘 TTL，逾時自動失效。
+    """
+    import time as _t
+
+    try:
+        store.set(f"outlook_req:{user_id}", str(_t.time()), ttl_seconds=600)
+    except store.StoreError as exc:
+        logger.error("寫入 Outlook 讀取請求失敗: %s", exc)
+
+
 def is_ms_linked(user_id: str) -> bool:
     try:
         token = get_ms_token(user_id)
