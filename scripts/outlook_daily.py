@@ -26,6 +26,19 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+# 排程執行時 stdout 被導進 log、預設用系統 cp950(Big5) 編碼，印 emoji（📧📭）會
+# UnicodeEncodeError 整個崩潰；pythonw 背景執行時 stdout 甚至是 None。統一修成
+# UTF-8、遇無法編碼的字元以替代字元帶過，不讓「印出來」這種小事害整支程式死掉。
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
