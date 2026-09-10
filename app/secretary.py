@@ -10,6 +10,11 @@ from app.google_oauth import GoogleNotConfiguredError, build_auth_url
 # 帶進模型的對話輪數；儲存端保留較多，這裡只取最近的。
 HISTORY_TURNS = 12
 
+OUTLOOK_TRIGGERED_MSG = (
+    "好，我請你電腦上的 Outlook 讀取器去讀最新未讀信，稍等一下下就傳給你。\n"
+    "（需要你的電腦開著、傳統版 Outlook 開著；沒開的話會等下次開機／排程時間）"
+)
+
 HELP_TEXT = """我是你的 AI 秘書，可以：
 
 【一般】
@@ -64,17 +69,11 @@ def handle_text(
     cmd = raw.replace(" ", "")
 
     # Outlook 讀信：雲端碰不到公司信箱，改記旗標讓使用者電腦上的看守程式去讀。
+    # 只要提到 outlook 就觸發（bot 對 outlook 唯一能做的就是觸發讀取，不怕誤判）。
     low = cmd.lower()
-    if "outlook" in low and (
-        cmd in ("outlook", "Outlook")
-        or any(k in cmd for k in ("信", "讀", "郵件", "未讀", "收"))
-        or "mail" in low
-    ):
+    if "outlook" in low:
         memory.request_outlook_read(user_id)
-        return (
-            "好，我請你電腦上的 Outlook 讀取器去讀最新未讀信，稍等一下下就傳給你。\n"
-            "（需要你的電腦開著、傳統版 Outlook 開著；沒開的話會等下次開機／排程時間）"
-        )
+        return OUTLOOK_TRIGGERED_MSG
 
     if cmd in ("說明", "幫助", "help", "/help", "？", "?"):
         return HELP_TEXT

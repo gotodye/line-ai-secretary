@@ -24,9 +24,10 @@ _BASE_PROMPT = """你是使用者的私人秘書，透過 LINE 與對方溝通�
 原則：
 - 使用繁體中文，簡潔、條理清楚。
 - 需要查日曆、郵件、雲端硬碟、待辦、試算表時，請呼叫對應工具，不要臆造資料。
-- 你能查的信箱是 Gmail（list_recent_emails）。Outlook／公司信箱不由你處理，
-  由使用者電腦上的本機讀取器負責；使用者要 Outlook 時不要說「未連結」，
-  直接告訴他傳「Outlook 信件」即可。
+- 信箱有兩個：Gmail 用 list_recent_emails 直接查；Outlook／公司信箱你無法直接讀，
+  但可以呼叫 check_outlook_mail 觸發使用者電腦上的本機讀取器去讀（稍後會自動推播
+  給他）。使用者想看 Outlook／公司信、或說「檢查／查信／看一下」而語境是指 Outlook
+  時，就呼叫 check_outlook_mail，**絕對不要說自己無法檢查 Outlook**。
 - 需要即時資訊（天氣、新聞、股價、任何你不確定或可能已過時的事實）時，
   呼叫 web_search，不要憑記憶回答。
 - 若工具回傳尚未連結 Google，請引導使用者傳送「連結 Google」。
@@ -195,6 +196,15 @@ TOOL_DECLARATIONS = [
         ),
     ),
     types.FunctionDeclaration(
+        name="check_outlook_mail",
+        description=(
+            "使用者想查看 Outlook／公司信箱時呼叫。會請使用者電腦上的本機讀取器去讀"
+            "最新未讀信，讀完自動推播給他。你自己讀不到 Outlook，但呼叫這個就能觸發；"
+            "不要回覆說自己無法檢查 Outlook。"
+        ),
+        parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+    ),
+    types.FunctionDeclaration(
         name="web_search",
         description=(
             "搜尋網路取得即時或不確定的資訊：天氣、新聞、股價、營業時間、"
@@ -276,6 +286,15 @@ def web_search(query: str) -> dict:
     return {"answer": answer, "sources": sources[:5]}
 
 
+def _trigger_outlook(user_id: str) -> dict:
+    """記旗標讓使用者電腦上的本機讀取器去讀 Outlook；回覆讓模型轉述給使用者。"""
+    memory.request_outlook_read(user_id)
+    return {
+        "result": "已請使用者電腦上的 Outlook 讀取器去讀最新未讀信，讀完會自動推播。"
+        "（需要他的電腦開著、傳統版 Outlook 開著）"
+    }
+
+
 def _tool_impl_map(user_id: str) -> dict[str, Callable[..., Any]]:
     return {
         "list_upcoming_events": lambda **kw: gsvc.list_upcoming_events(user_id, **kw),
@@ -287,6 +306,7 @@ def _tool_impl_map(user_id: str) -> dict[str, Callable[..., Any]]:
         "list_tasks": lambda **kw: gsvc.list_tasks(user_id, **kw),
         "create_task": lambda **kw: gsvc.create_task(user_id, **kw),
         "read_sheet": lambda **kw: gsvc.read_sheet(user_id, **kw),
+        "check_outlook_mail": lambda **kw: _trigger_outlook(user_id),
         "web_search": lambda **kw: web_search(**kw),
         "remember_fact": lambda **kw: {"result": memory.add_fact(user_id, **kw)},
         "forget_fact": lambda **kw: {"result": memory.remove_fact(user_id, **kw)},
