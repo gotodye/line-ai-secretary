@@ -395,8 +395,26 @@ def chat(
             if text:
                 return text
             empty_rounds += 1
-            if empty_rounds <= 2:
-                logger.warning("模型回傳空內容，重試第 %d 次", empty_rounds)
+            logger.warning("模型回傳空內容，重試第 %d 次", empty_rounds)
+            # 已經有工具結果在 contents 裡（例如簡報查完日曆/信件/天氣）卻回空——
+            # 大多發生在最後彙整那步。拿掉工具、強制純文字再彙整一次，
+            # 純文字呼叫幾乎不會回空，比單純重試同一個請求可靠得多。
+            if len(contents) > 1:
+                try:
+                    forced = client.models.generate_content(
+                        model=config.GEMINI_MODEL,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=_build_system_prompt(user_id),
+                            temperature=0.4,
+                        ),
+                    )
+                    forced_text = _extract_text(forced)
+                    if forced_text:
+                        return forced_text
+                except Exception:  # noqa: BLE001
+                    logger.exception("純文字彙整重試失敗")
+            if empty_rounds <= 3:
                 continue
             return "（沒有產生內容，請再試一次）"
 
