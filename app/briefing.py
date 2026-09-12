@@ -54,14 +54,27 @@ _OUTLOOK_STEP = (
 )
 
 
+# 模型偶發會回空內容（chat 內部重試後仍空就回這句）。簡報是每天一次的重要
+# 訊息，不能把這句垃圾推出去，所以在這一層再整份重試，全失敗才往上拋。
+_EMPTY_MARK = "沒有產生內容"
+_MAX_BRIEF_ATTEMPTS = 3
+
+
 def build_brief(user_id: str) -> str:
-    """Generate one user's brief. Reuses the normal tool loop."""
+    """Generate one user's brief. Reuses the normal tool loop. 失敗會拋例外。"""
     prompt = _BRIEF_REQUEST
     # 只有連了 Outlook 的人才叫模型去查，避免其他人每天多打一次注定失敗的工具。
     if memory.is_ms_linked(user_id):
         prompt += _OUTLOOK_STEP
-    # 不帶對話歷史：簡報是獨立的一次性任務，混入昨天的閒聊只會干擾。
-    return gemini_client.chat(user_id, prompt, history=[])
+
+    for attempt in range(_MAX_BRIEF_ATTEMPTS):
+        # 不帶對話歷史：簡報是獨立的一次性任務，混入昨天的閒聊只會干擾。
+        text = gemini_client.chat(user_id, prompt, history=[])
+        if text and _EMPTY_MARK not in text and len(text.strip()) >= 20:
+            return text
+        logger.warning("簡報第 %d 次產生為空，重試", attempt + 1)
+
+    raise RuntimeError("簡報產生失敗：模型多次回傳空內容")
 
 
 def send_briefs(push_fn, force: bool = False) -> dict:
