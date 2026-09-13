@@ -58,6 +58,10 @@ DEFAULT_LOOKBACK_H = 24   # 沒有浮水印時往回讀幾小時
 TRIAGE_RULES = """使用者本人是 Angus（中文名 禹欣 / Yu-Hsin），信箱 angus@eui.money。
 以下是他新收到的 Outlook 信件（含 To/CC 與內文）。依內文判斷，嚴格遵守規則：
 
+★★ 最重要：只能整理「下方實際列出的信件」，一封都不可以自己編造。下方沒有出現的
+寄件者或主旨，絕對不可以出現在你的回覆裡。你列出的信件總數不可以超過下方實際的封數。
+如果下方沒有任何信件，就只回一句「（沒有新信）」，不要編任何範例。★★
+
 A. 一定看內文，不能只看主旨。
 B. 判斷這封在「要求誰動作」：只有明確要求 Angus/禹欣 本人（內文稱呼他，或他是主要
    收件者 To 且被點名要動作）時，才算需要他回。若內文是在問別人（例如 Jeff、其他同事），
@@ -140,17 +144,25 @@ def read_new(cutoff: datetime) -> tuple[list[dict], datetime | None]:
     return out, newest
 
 
+def _plain_summary(emails: list[dict]) -> str:
+    """不經模型、逐封列出真實信件的純列表（防幻覺的保底輸出）。"""
+    lines = [f"- {e['from'] or '(無寄件者)'}：{e['subject']}" for e in emails]
+    return "（逐封列出，未分類）\n" + "\n".join(lines)
+
+
 def triage(emails: list[dict]) -> str:
+    # 防線 1：沒有信就不要叫模型整理（空輸入會讓模型憑空編造範例信）。
+    if not emails:
+        return "（沒有新信）"
+
     blocks = "\n\n".join(
         f"[信 {i+1}] 寄件者:{e['from']} <{e['email']}>\nTo:{e['to']}\nCC:{e['cc']}\n"
         f"主旨:{e['subject']}\n內文:\n{e['body']}"
         for i, e in enumerate(emails)
     )
     if not GEMINI_API_KEY:
-        return "📧 Outlook 新信 %d 封\n%s" % (
-            len(emails),
-            "\n".join(f"- {e['from']}｜{e['subject']}" for e in emails),
-        )
+        return _plain_summary(emails)
+
     from google import genai
     from google.genai import types
 
@@ -160,7 +172,18 @@ def triage(emails: list[dict]) -> str:
         contents=TRIAGE_RULES + "\n\n" + blocks,
         config=types.GenerateContentConfig(temperature=0.3),
     )
-    return (getattr(resp, "text", "") or "").strip()
+    text = (getattr(resp, "text", "") or "").strip()
+
+    # 防線 2：模型列出的信件數不該超過實際封數。超過就是幻覺，改用真實純列表。
+    bullets = [
+        ln for ln in text.splitlines()
+        if ln.lstrip().startswith(("-", "*", "•")) and ("：" in ln or ":" in ln)
+    ]
+    if len(bullets) > len(emails) + 1:
+        print(f"⚠ triage 疑似幻覺（列出 {len(bullets)} 條 > 實際 {len(emails)} 封），改用純列表")
+        return _plain_summary(emails)
+
+    return text or _plain_summary(emails)
 
 
 def push_to_line(text: str) -> None:
