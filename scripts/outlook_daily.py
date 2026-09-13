@@ -220,7 +220,19 @@ def run_once(dry_run: bool = False, full: bool = False) -> int:
         text = f"📭 Outlook：自 {cutoff:%m/%d %H:%M} 後沒有新信。"
     else:
         header = f"📧 Outlook 新信 {len(emails)} 封（{cutoff:%m/%d %H:%M} 起）\n\n"
-        text = header + triage(emails)
+        body = triage(emails)
+        # 信件少又全部被略過（judge 沒列任何一封）時，畫面只剩一句「其餘 N 封略過」，
+        # 看不出那幾封是什麼、容易讓人以為壞了。補上實際主旨讓使用者一眼可核對。
+        has_listed = any(
+            ln.lstrip().startswith(("-", "*", "•")) and ("：" in ln or ":" in ln)
+            for ln in body.splitlines()
+        )
+        if not has_listed and len(emails) <= 5:
+            skipped = "\n".join(
+                f"・{e['from'] or '(無寄件者)'}：{e['subject']}" for e in emails
+            )
+            body = f"沒有需要你處理或特別留意的信。這 {len(emails)} 封（略過）：\n{skipped}"
+        text = header + body
 
     print("-" * 50); print(text); print("-" * 50)
 
