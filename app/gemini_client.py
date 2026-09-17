@@ -28,6 +28,8 @@ _BASE_PROMPT = """你是使用者的私人秘書，透過 LINE 與對方溝通�
   但可以呼叫 check_outlook_mail 觸發使用者電腦上的本機讀取器去讀（稍後會自動推播
   給他）。使用者想看 Outlook／公司信、或說「檢查／查信／看一下」而語境是指 Outlook
   時，就呼叫 check_outlook_mail，**絕對不要說自己無法檢查 Outlook**。
+- 使用者要你在某個時間提醒他做某事時，**一定要呼叫 set_reminder** 真的設定，
+  不可以只回「好，設定好了」卻沒呼叫工具。設定成功後，據實把時間覆述給他確認。
 - 需要即時資訊（天氣、新聞、股價、任何你不確定或可能已過時的事實）時，
   呼叫 web_search，不要憑記憶回答。
 - 若工具回傳尚未連結 Google，請引導使用者傳送「連結 Google」。
@@ -196,6 +198,28 @@ TOOL_DECLARATIONS = [
         ),
     ),
     types.FunctionDeclaration(
+        name="set_reminder",
+        description=(
+            "設定一個定時提醒：到指定時間會主動用 LINE 提醒使用者。"
+            "當使用者說「X 時間提醒我/提醒某人做某事」時呼叫。"
+            "時間用台北時間 ISO 8601（依系統提示的目前時間換算「今晚」「明天」等）。"
+        ),
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "when_iso": types.Schema(
+                    type=types.Type.STRING,
+                    description="提醒時間，台北時間 ISO 8601，例如 2026-09-14T20:30:00",
+                ),
+                "message": types.Schema(
+                    type=types.Type.STRING,
+                    description="提醒內容，例如「提醒 Ada 禁食」",
+                ),
+            },
+            required=["when_iso", "message"],
+        ),
+    ),
+    types.FunctionDeclaration(
         name="check_outlook_mail",
         description=(
             "使用者想查看 Outlook／公司信箱時呼叫。會請使用者電腦上的本機讀取器去讀"
@@ -286,6 +310,26 @@ def web_search(query: str) -> dict:
     return {"answer": answer, "sources": sources[:5]}
 
 
+def _set_reminder(user_id: str, when_iso: str, message: str) -> dict:
+    """把提醒存進 store，到時間由看守程式推播。回傳讓模型據實轉述時間。"""
+    from datetime import datetime
+
+    try:
+        dt = datetime.fromisoformat(when_iso.strip())
+    except ValueError:
+        return {"error": "時間格式看不懂，請用 ISO 8601（例如 2026-09-14T20:30:00）"}
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=TW_TZ)
+    dt = dt.astimezone(TW_TZ)
+    if dt.timestamp() <= _now_tw().timestamp():
+        return {"error": "那個時間已經過了，請設定未來的時間。"}
+    memory.add_reminder(user_id, dt.timestamp(), message)
+    return {
+        "result": f"已設定提醒：{dt:%Y-%m-%d %H:%M} — {message}。時間到會用 LINE 提醒你。"
+        "（提醒需要你的電腦開著才會準時送出）"
+    }
+
+
 def _trigger_outlook(user_id: str) -> dict:
     """記旗標讓使用者電腦上的本機讀取器去讀 Outlook；回覆讓模型轉述給使用者。"""
     memory.request_outlook_read(user_id)
@@ -307,6 +351,7 @@ def _tool_impl_map(user_id: str) -> dict[str, Callable[..., Any]]:
         "create_task": lambda **kw: gsvc.create_task(user_id, **kw),
         "read_sheet": lambda **kw: gsvc.read_sheet(user_id, **kw),
         "check_outlook_mail": lambda **kw: _trigger_outlook(user_id),
+        "set_reminder": lambda **kw: _set_reminder(user_id, **kw),
         "web_search": lambda **kw: web_search(**kw),
         "remember_fact": lambda **kw: {"result": memory.add_fact(user_id, **kw)},
         "forget_fact": lambda **kw: {"result": memory.remove_fact(user_id, **kw)},

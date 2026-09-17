@@ -309,7 +309,42 @@ def serve() -> int:
                         pass
         except Exception as e:  # noqa: BLE001
             _serve_log(f"輪詢錯誤（略過本次）：{e}")
+
+        # 順便檢查到期的定時提醒（使用者在 LINE 設的「X 時間提醒我…」）
+        try:
+            _fire_due_reminders()
+        except Exception as e:  # noqa: BLE001
+            _serve_log(f"提醒檢查錯誤（略過本次）：{e}")
+
         _t.sleep(SERVE_POLL_SECONDS)
+
+
+def _fire_due_reminders() -> None:
+    """讀 Upstash 裡到期的提醒，推播到 LINE 並移除。與雲端 memory 用同一個資料結構。"""
+    import json as _json
+    import time as _time
+
+    rkey = f"reminders:{OWNER_USER_ID}"
+    raw = _upstash("GET", rkey)
+    if not raw:
+        return
+    try:
+        rems = _json.loads(raw)
+    except (ValueError, TypeError):
+        return
+    now = _time.time()
+    due = [r for r in rems if isinstance(r, dict) and r.get("fire_at", 0) <= now]
+    if not due:
+        return
+    keep = [r for r in rems if isinstance(r, dict) and r.get("fire_at", 0) > now]
+    _upstash("SET", rkey, _json.dumps(keep, ensure_ascii=False))
+    for r in due:
+        msg = r.get("message", "")
+        try:
+            push_to_line(f"⏰ 提醒：{msg}")
+            _serve_log(f"已發送提醒：{msg}")
+        except Exception as e:  # noqa: BLE001
+            _serve_log(f"提醒推播失敗：{e}")
 
 
 def check_once() -> int:

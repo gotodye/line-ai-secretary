@@ -166,6 +166,56 @@ def request_outlook_read(user_id: str) -> None:
         logger.error("寫入 Outlook 讀取請求失敗: %s", exc)
 
 
+def _reminders_key(user_id: str) -> str:
+    return f"reminders:{user_id}"
+
+
+def _load_reminders(user_id: str) -> list[dict]:
+    try:
+        raw = store.get(_reminders_key(user_id))
+    except store.StoreError as exc:
+        logger.error("讀取提醒失敗: %s", exc)
+        return []
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return [r for r in items if isinstance(r, dict) and "fire_at" in r]
+
+
+def add_reminder(user_id: str, fire_at: float, message: str) -> None:
+    """新增一筆定時提醒；到 fire_at（epoch 秒）看守程式會用 LINE 推播 message。"""
+    with _lock:
+        rems = _load_reminders(user_id)
+        rems.append({"fire_at": float(fire_at), "message": message})
+        rems.sort(key=lambda r: r["fire_at"])
+        store.set(_reminders_key(user_id), json.dumps(rems, ensure_ascii=False))
+
+
+def get_reminders(user_id: str) -> list[dict]:
+    return _load_reminders(user_id)
+
+
+def pop_due_reminders(user_id: str, now: float) -> list[dict]:
+    """取出並移除所有到期（fire_at <= now）的提醒。"""
+    with _lock:
+        rems = _load_reminders(user_id)
+        due = [r for r in rems if r.get("fire_at", 0) <= now]
+        if due:
+            keep = [r for r in rems if r.get("fire_at", 0) > now]
+            store.set(_reminders_key(user_id), json.dumps(keep, ensure_ascii=False))
+    return due
+
+
+def clear_reminders(user_id: str) -> None:
+    try:
+        store.delete(_reminders_key(user_id))
+    except store.StoreError as exc:
+        logger.error("清除提醒失敗: %s", exc)
+
+
 def is_ms_linked(user_id: str) -> bool:
     try:
         token = get_ms_token(user_id)
