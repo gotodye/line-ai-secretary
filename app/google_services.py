@@ -57,6 +57,7 @@ def create_event(
     end_iso: str,
     description: str = "",
     location: str = "",
+    reminder_minutes: list[int] | None = None,
 ) -> dict[str, Any]:
     service = _svc(user_id, "calendar", "v3")
     body: dict[str, Any] = {
@@ -66,6 +67,13 @@ def create_event(
         "start": {"dateTime": start_iso, "timeZone": "Asia/Taipei"},
         "end": {"dateTime": end_iso, "timeZone": "Asia/Taipei"},
     }
+    # reminder_minutes：事件前幾分鐘用彈出通知提醒（[0] = 事件當下）。
+    # 提醒類事件用這個，Google 會在使用者手機/裝置通知，不受本機電腦開關影響。
+    if reminder_minutes is not None:
+        body["reminders"] = {
+            "useDefault": False,
+            "overrides": [{"method": "popup", "minutes": m} for m in reminder_minutes],
+        }
     created = service.events().insert(calendarId="primary", body=body).execute()
     return {
         "id": created.get("id"),

@@ -22,14 +22,22 @@ _WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 _BASE_PROMPT = """你是使用者的私人秘書，透過 LINE 與對方溝通。
 
 原則：
+- **絕對不要產生幻覺**：只根據工具實際回傳的結果回答。任何需要「做動作」的指令
+  （設提醒、建行程、寄信、查資料…）都必須真的呼叫對應工具，不可以只回「好，完成了」
+  卻沒做。沒有對應工具能做的事，就老實說做不到，不要假裝。
+- **不確定就先問，不要猜**：指令不清楚、資訊不足（時間、對象、內容不明）、或你不確定
+  該做哪個動作時，直接反問使用者確認清楚再動手，寧可多問一句也不要猜錯或編造。
 - 使用繁體中文，簡潔、條理清楚。
 - 需要查日曆、郵件、雲端硬碟、待辦、試算表時，請呼叫對應工具，不要臆造資料。
 - 信箱有兩個：Gmail 用 list_recent_emails 直接查；Outlook／公司信箱你無法直接讀，
   但可以呼叫 check_outlook_mail 觸發使用者電腦上的本機讀取器去讀（稍後會自動推播
   給他）。使用者想看 Outlook／公司信、或說「檢查／查信／看一下」而語境是指 Outlook
   時，就呼叫 check_outlook_mail，**絕對不要說自己無法檢查 Outlook**。
-- 使用者要你在某個時間提醒他做某事時，**一定要呼叫 set_reminder** 真的設定，
-  不可以只回「好，設定好了」卻沒呼叫工具。設定成功後，據實把時間覆述給他確認。
+- 使用者要你在某個時間提醒他做某事時，**兩件事都要做**：
+  (1) 呼叫 create_event 把它加進 Google 行事曆，reminder_minutes 傳 [0]，
+      這樣 Google 會在該時間通知他手機（電腦關機也會通知，最可靠）；
+  (2) 呼叫 set_reminder 設本機 LINE 提醒（電腦開著時也會用 LINE 提醒）。
+  兩個都成功後，據實把時間覆述給他確認。絕不可以只回「好，設定好了」卻沒呼叫工具。
 - 需要即時資訊（天氣、新聞、股價、任何你不確定或可能已過時的事實）時，
   呼叫 web_search，不要憑記憶回答。
 - 若工具回傳尚未連結 Google，請引導使用者傳送「連結 Google」。
@@ -101,7 +109,10 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="create_event",
-        description="在 Google Calendar 建立行程（時間用 ISO 8601，時區 Asia/Taipei）",
+        description=(
+            "在 Google Calendar 建立行程或提醒（時間用 ISO 8601，時區 Asia/Taipei）。"
+            "做提醒時，reminder_minutes 傳 [0] 讓 Google 在該時間彈出通知到使用者手機。"
+        ),
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={
@@ -110,6 +121,11 @@ TOOL_DECLARATIONS = [
                 "end_iso": types.Schema(type=types.Type.STRING, description="例如 2026-07-21T15:00:00"),
                 "description": types.Schema(type=types.Type.STRING),
                 "location": types.Schema(type=types.Type.STRING),
+                "reminder_minutes": types.Schema(
+                    type=types.Type.ARRAY,
+                    items=types.Schema(type=types.Type.INTEGER),
+                    description="事件前幾分鐘彈出通知；提醒用 [0]（事件當下通知）",
+                ),
             },
             required=["summary", "start_iso", "end_iso"],
         ),
