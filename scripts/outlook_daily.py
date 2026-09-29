@@ -54,6 +54,8 @@ STATE_FILE = ROOT / "data" / "outlook_state.json"
 SERVE_POLL_SECONDS = 15   # --serve 每隔幾秒檢查一次雲端旗標（隱形背景，不閃視窗）
 MAX_PROCESS = 40          # 一次最多處理幾封新信（電腦關很久、累積太多時的上限）
 DEFAULT_LOOKBACK_H = 24   # 沒有浮水印時往回讀幾小時
+# 除了收件匣，還要一起讀的收件匣「子資料夾」名稱（規則自動分類進去、但使用者想看的）。
+EXTRA_INBOX_FOLDERS = ["HK daily"]
 
 TRIAGE_RULES = """使用者本人是 Angus（中文名 禹欣 / Yu-Hsin），信箱 angus@eui.money。
 以下是他新收到的 Outlook 信件（含 To/CC 與內文）。依內文判斷，嚴格遵守規則：
@@ -74,6 +76,9 @@ E. ★具名真人（同事、主管、客戶等，非系統/銀行/行銷/電�
    一律至少列入【重要，留意但不必回】，就算你覺得不重要也**絕對不可以歸進「略過」**。
    真人來信寧可多列。「略過」只能用在 C 類那種明確的自動信；不確定是不是真人來信，
    就列出來、不要略過。（例：Melvin 寄來談績效考核的信＝真人來信，必須列出。）
+F. ★每封信會標 [來源:xxx]。凡是來源**不是「收件匣」**的（例如 [來源:HK daily]），
+   代表使用者特別指定要看這個資料夾，**一律列入【重要，留意但不必回】並在該封註明來源**，
+   絕不可略過（即使看起來像報表/自動信）。
 
 只輸出兩類（用這個格式）：
 【需要我回覆／簽核】
@@ -101,22 +106,10 @@ def _save_watermark(dt: datetime) -> None:
     )
 
 
-def read_new(cutoff: datetime) -> tuple[list[dict], datetime | None]:
-    """讀 ReceivedTime 嚴格大於 cutoff 的新信；回傳 (清單, 最新一封的時間)。"""
-    import pythoncom
-    import win32com.client as com
-
-    pythoncom.CoInitialize()
-    try:
-        app = com.GetActiveObject("Outlook.Application")
-    except Exception:
-        app = com.Dispatch("Outlook.Application")
-
-    ns = app.GetNamespace("MAPI")
-    inbox = ns.GetDefaultFolder(6)
-    items = inbox.Items
+def _collect_folder(folder, cutoff: datetime, source: str) -> tuple[list[dict], datetime | None]:
+    """讀單一資料夾中 ReceivedTime > cutoff 的信。source 標明來源（收件匣或子資料夾名）。"""
+    items = folder.Items
     items.Sort("[ReceivedTime]", True)  # 新到舊
-
     out: list[dict] = []
     newest: datetime | None = None
     for m in items:
@@ -137,8 +130,9 @@ def read_new(cutoff: datetime) -> tuple[list[dict], datetime | None]:
                     "to": (getattr(m, "To", "") or "").strip(),
                     "cc": (getattr(m, "CC", "") or "").strip(),
                     "subject": (getattr(m, "Subject", "") or "(無主旨)").strip(),
-                    "received": rt.strftime("%m/%d %H:%M"),
+                    "received": rt,
                     "body": (getattr(m, "Body", "") or "")[:2000].strip(),
+                    "folder": source,
                 }
             )
         except Exception:
@@ -148,10 +142,56 @@ def read_new(cutoff: datetime) -> tuple[list[dict], datetime | None]:
     return out, newest
 
 
+def read_new(cutoff: datetime) -> tuple[list[dict], datetime | None]:
+    """讀收件匣＋指定子資料夾中 ReceivedTime > cutoff 的新信；回傳 (清單, 最新時間)。"""
+    import pythoncom
+    import win32com.client as com
+
+    pythoncom.CoInitialize()
+    try:
+        app = com.GetActiveObject("Outlook.Application")
+    except Exception:
+        app = com.Dispatch("Outlook.Application")
+
+    ns = app.GetNamespace("MAPI")
+    inbox = ns.GetDefaultFolder(6)
+
+    # 收件匣本身，加上使用者指定要一起讀的子資料夾（規則自動分類進去的）。
+    targets = [(inbox, "收件匣")]
+    for name in EXTRA_INBOX_FOLDERS:
+        try:
+            targets.append((inbox.Folders[name], name))
+        except Exception:
+            print(f"（找不到子資料夾「{name}」，略過）")
+
+    merged: list[dict] = []
+    newest: datetime | None = None
+    for folder, source in targets:
+        got, folder_newest = _collect_folder(folder, cutoff, source)
+        merged.extend(got)
+        if folder_newest and (newest is None or folder_newest > newest):
+            newest = folder_newest
+
+    # 取上限時保證「指定子資料夾」的信不被收件匣大量新信擠掉：先留下非收件匣的，
+    # 再用收件匣的信把剩餘名額填滿。
+    extra = [e for e in merged if e.get("folder") != "收件匣"]
+    inbox_e = [e for e in merged if e.get("folder") == "收件匣"]
+    extra.sort(key=lambda e: e["received"], reverse=True)
+    inbox_e.sort(key=lambda e: e["received"], reverse=True)
+    kept = extra[:MAX_PROCESS] + inbox_e[: max(0, MAX_PROCESS - len(extra[:MAX_PROCESS]))]
+    kept.sort(key=lambda e: e["received"], reverse=True)
+    for e in kept:
+        e["received"] = e["received"].strftime("%m/%d %H:%M")
+    return kept, newest
+
+
 def _plain_summary(emails: list[dict]) -> str:
     """不經模型、逐封列出真實信件的純列表（防幻覺的保底輸出）。"""
-    lines = [f"- {e['from'] or '(無寄件者)'}：{e['subject']}" for e in emails]
-    return "（逐封列出，未分類）\n" + "\n".join(lines)
+    def _line(e):
+        src = e.get("folder", "")
+        tag = f"[{src}] " if src and src != "收件匣" else ""
+        return f"- {tag}{e['from'] or '(無寄件者)'}：{e['subject']}"
+    return "（逐封列出，未分類）\n" + "\n".join(_line(e) for e in emails)
 
 
 def triage(emails: list[dict]) -> str:
@@ -160,8 +200,8 @@ def triage(emails: list[dict]) -> str:
         return "（沒有新信）"
 
     blocks = "\n\n".join(
-        f"[信 {i+1}] 寄件者:{e['from']} <{e['email']}>\nTo:{e['to']}\nCC:{e['cc']}\n"
-        f"主旨:{e['subject']}\n內文:\n{e['body']}"
+        f"[信 {i+1}] [來源:{e.get('folder','收件匣')}] 寄件者:{e['from']} <{e['email']}>\n"
+        f"To:{e['to']}\nCC:{e['cc']}\n主旨:{e['subject']}\n內文:\n{e['body']}"
         for i, e in enumerate(emails)
     )
     if not GEMINI_API_KEY:
