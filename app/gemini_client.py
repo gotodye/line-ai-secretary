@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 TW_TZ = timezone(timedelta(hours=8))
 _WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
 
+# Gemini 3.x 改用 thinking_level 取代被淘汰的 temperature/top_p/top_k。
+# low：最快、足以應付判讀/格式化/工具呼叫這類任務（需要更深推理時再調 medium）。
+_THINK_LOW = types.ThinkingConfig(thinking_level="low")
+
 _BASE_PROMPT = """你是使用者的私人秘書，透過 LINE 與對方溝通。
 
 原則：
@@ -312,7 +316,7 @@ def web_search(query: str) -> dict:
         contents=f"現在是 {now:%Y-%m-%d %H:%M}（台北時間）。{query}",
         config=types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.2,
+            thinking_config=_THINK_LOW,
         ),
     )
     answer = _extract_text(response)
@@ -431,7 +435,7 @@ def chat(
     config_gen = types.GenerateContentConfig(
         system_instruction=_build_system_prompt(user_id),
         tools=tools,
-        temperature=0.4,
+        thinking_config=_THINK_LOW,
     )
 
     # 模型偶發會回傳完全空的內容（finish_reason=STOP、零個 part、零輸出 token）。
@@ -470,7 +474,7 @@ def chat(
                         contents=contents,
                         config=types.GenerateContentConfig(
                             system_instruction=_build_system_prompt(user_id),
-                            temperature=0.4,
+                            thinking_config=_THINK_LOW,
                         ),
                     )
                     forced_text = _extract_text(forced)

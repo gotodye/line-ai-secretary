@@ -14,7 +14,7 @@ services:
       - key: DATA_DIR
         value: /tmp/line-ai-data
       - key: GEMINI_MODEL
-        value: gemini-2.5-flash
+        value: gemini-3.8-flash
       - key: LINE_CHANNEL_SECRET
         sync: false
       - key: LINE_CHANNEL_ACCESS_TOKEN

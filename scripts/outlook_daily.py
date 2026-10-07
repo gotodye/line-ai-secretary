@@ -44,7 +44,7 @@ load_dotenv(ROOT / ".env")
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
 OWNER_USER_ID = os.environ.get("LINE_OWNER_USER_ID", "").strip()
 
 UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/")
@@ -221,7 +221,10 @@ def triage(emails: list[dict]) -> str:
     resp = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=TRIAGE_RULES + "\n\n" + blocks,
-        config=types.GenerateContentConfig(temperature=0.3),
+        # Gemini 3.x 用 thinking_level 取代被淘汰的 temperature。
+        config=types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_level="low")
+        ),
     )
     text = (getattr(resp, "text", "") or "").strip()
 
