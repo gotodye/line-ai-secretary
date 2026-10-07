@@ -43,6 +43,7 @@ def index():
     return {
         "service": "line-ai-secretary",
         "status": "ok",
+        "model": config.GEMINI_MODEL,
         "google_oauth_configured": config.google_oauth_configured(),
         "ms_oauth_configured": config.ms_oauth_configured(),
         "base_url": config.BASE_URL or None,
